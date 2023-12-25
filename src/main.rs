@@ -23,14 +23,26 @@ struct AppState {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct CustomMessaage {
-    message: String,
+    message: Option<String>,
     message_type: Option<String>,
     sender_id: Option<usize>,
+    position: Option<Position>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+struct Position {
+    x: i32,
+    y: i32,
 }
 
 impl CustomMessaage {
     fn set_sender_id(&mut self, id: usize) {
         self.sender_id = Some(id)
+    }
+
+    fn set_position(&mut self, x: i32, y: i32) {
+        self.position = Some(Position { x, y });
     }
 }
 
@@ -81,25 +93,27 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
     };
 
     let message = CustomMessaage {
-        message: format!(
+        message: Some(format!(
             "Welcome! There is {} players. Your id is {}.",
             state.clients_count.lock().unwrap(),
             my_id.lock().unwrap(),
-        ),
+        )),
         message_type: Some("server".into()),
         sender_id: None,
+        position: None,
     };
 
     let serialized = serde_json::to_string(&message).unwrap();
     let _ = sender.send(Message::Text(serialized)).await;
 
     let message = CustomMessaage {
-        message: format!(
+        message: Some(format!(
             "Player {} joined",
-            state.clients.lock().unwrap().last().unwrap()
-        ),
+            state.clients.lock().unwrap().last().unwrap(),
+        )),
         message_type: Some("server".into()),
         sender_id: None,
+        position: None,
     };
 
     let serialized = serde_json::to_string(&message).unwrap();
@@ -145,6 +159,11 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
             match deserialized {
                 Ok(mut result) => {
                     result.set_sender_id(*my_id_clone.lock().unwrap());
+
+                    result.set_position(
+                        result.position.clone().unwrap().x,
+                        result.position.clone().unwrap().y,
+                    );
                     cloned_state
                         .tx
                         .send(Message::Text(serde_json::to_string(&result).unwrap()))
@@ -152,9 +171,10 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
                 }
                 Err(err) => {
                     let err_message = CustomMessaage {
-                        message: err.to_string(),
+                        message: Some(err.to_string()),
                         message_type: Some("server_error".into()),
                         sender_id: Some(*my_id_clone.lock().unwrap()),
+                        position: None,
                     };
                     cloned_state
                         .tx
