@@ -115,14 +115,16 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
             let deserialized: CustomMessaage =
                 serde_json::from_str(&message.into_text().unwrap()).unwrap();
 
-            if deserialized.message_type.unwrap() == "server_error" {
+            if deserialized.message_type == Some("server_error".into()) {
                 if deserialized.sender_id.unwrap() == *my_id_clone.lock().unwrap()
                     && sender.send(m).await.is_err()
                 {
+                    println!("this first block");
                     break;
                 }
             } else {
                 if sender.send(m).await.is_err() {
+                    println!("this second block");
                     break;
                 }
             }
@@ -140,22 +142,25 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
             let deserialized: Result<CustomMessaage, serde_json::Error> =
                 serde_json::from_str(&text);
 
-            if let Ok(mut result) = deserialized {
-                result.set_sender_id(*my_id_clone.lock().unwrap());
-                cloned_state
-                    .tx
-                    .send(Message::Text(serde_json::to_string(&result).unwrap()))
-                    .unwrap();
-            } else {
-                let err_message = CustomMessaage {
-                    message: "Invalid Message".into(),
-                    message_type: Some("server_error".into()),
-                    sender_id: Some(*my_id_clone.lock().unwrap()),
-                };
-                cloned_state
-                    .tx
-                    .send(Message::Text(serde_json::to_string(&err_message).unwrap()))
-                    .unwrap();
+            match deserialized {
+                Ok(mut result) => {
+                    result.set_sender_id(*my_id_clone.lock().unwrap());
+                    cloned_state
+                        .tx
+                        .send(Message::Text(serde_json::to_string(&result).unwrap()))
+                        .unwrap();
+                }
+                Err(err) => {
+                    let err_message = CustomMessaage {
+                        message: err.to_string(),
+                        message_type: Some("server_error".into()),
+                        sender_id: Some(*my_id_clone.lock().unwrap()),
+                    };
+                    cloned_state
+                        .tx
+                        .send(Message::Text(serde_json::to_string(&err_message).unwrap()))
+                        .unwrap();
+                }
             }
         }
     });
