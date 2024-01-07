@@ -14,19 +14,23 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, sync::broadcast};
 
+#[derive(Debug)]
 struct AppState {
     clients_count: Mutex<usize>,
-    clients: Mutex<Vec<usize>>,
+    clients_position: Mutex<Vec<ClientPosition>>,
     tx: broadcast::Sender<Message>,
-    sender_id: Mutex<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
 struct CustomMessaage {
     message: Option<String>,
     message_type: Option<String>,
     sender_id: Option<usize>,
+    my_id: Option<usize>,
     position: Option<Position>,
+    client_count: Option<usize>,
+    clients_position: Option<Vec<ClientPosition>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -34,6 +38,20 @@ struct CustomMessaage {
 struct Position {
     x: i32,
     y: i32,
+}
+
+impl Position {
+    fn set_position(&mut self, x: i32, y: i32) {
+        self.x = x;
+        self.y = y;
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+struct ClientPosition {
+    client_id: usize,
+    poistion: Position,
 }
 
 impl CustomMessaage {
@@ -52,9 +70,8 @@ async fn main() {
 
     let state = Arc::new(AppState {
         clients_count: Mutex::new(0),
-        clients: Mutex::new(Vec::new()),
+        clients_position: Mutex::new(Vec::new()),
         tx,
-        sender_id: Mutex::new(0),
     });
 
     let app = Router::new()
@@ -83,11 +100,16 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
         let mut count = state.clients_count.lock().unwrap();
         *count += 1;
 
-        let mut clients = state.clients.lock().unwrap();
-        clients.push(*count);
-
         let mut my_id = my_id.lock().unwrap();
         *my_id = *count;
+
+        let mut clients = state.clients_position.lock().unwrap();
+
+        let client_position = ClientPosition {
+            client_id: *my_id,
+            poistion: Position { x: 0, y: 0 },
+        };
+        clients.push(client_position);
 
         state.tx.subscribe()
     };
@@ -101,6 +123,9 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
         message_type: Some("server".into()),
         sender_id: None,
         position: None,
+        my_id: Some(*my_id.lock().unwrap()),
+        client_count: Some(*state.clients_count.lock().unwrap()),
+        clients_position: Some(state.clients_position.lock().unwrap().to_vec()),
     };
 
     let serialized = serde_json::to_string(&message).unwrap();
@@ -109,11 +134,14 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
     let message = CustomMessaage {
         message: Some(format!(
             "Player {} joined",
-            state.clients.lock().unwrap().last().unwrap(),
+            state.clients_count.lock().unwrap(),
         )),
         message_type: Some("server".into()),
         sender_id: None,
         position: None,
+        my_id: Some(*my_id.lock().unwrap()),
+        client_count: Some(*state.clients_count.lock().unwrap()),
+        clients_position: Some(state.clients_position.lock().unwrap().to_vec()),
     };
 
     let serialized = serde_json::to_string(&message).unwrap();
@@ -133,12 +161,10 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
                 if deserialized.sender_id.unwrap() == *my_id_clone.lock().unwrap()
                     && sender.send(m).await.is_err()
                 {
-                    println!("this first block");
                     break;
                 }
             } else {
                 if sender.send(m).await.is_err() {
-                    println!("this second block");
                     break;
                 }
             }
@@ -158,12 +184,29 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
 
             match deserialized {
                 Ok(mut result) => {
+                    println!("got {:?}", result);
                     result.set_sender_id(*my_id_clone.lock().unwrap());
 
                     result.set_position(
                         result.position.clone().unwrap().x,
                         result.position.clone().unwrap().y,
                     );
+
+                    let mut clients_position = cloned_state.clients_position.lock().unwrap();
+
+                    let position = clients_position
+                        .iter()
+                        .map(|e| e.client_id)
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .position(|e| *e == *my_id.lock().unwrap())
+                        .unwrap();
+
+                    clients_position[position].poistion.set_position(
+                        result.position.clone().unwrap().x,
+                        result.position.clone().unwrap().y,
+                    );
+
                     cloned_state
                         .tx
                         .send(Message::Text(serde_json::to_string(&result).unwrap()))
@@ -175,6 +218,9 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
                         message_type: Some("server_error".into()),
                         sender_id: Some(*my_id_clone.lock().unwrap()),
                         position: None,
+                        my_id: Some(*my_id.lock().unwrap()),
+                        client_count: None,
+                        clients_position: None,
                     };
                     cloned_state
                         .tx
