@@ -51,7 +51,7 @@ impl Position {
 #[serde(rename_all = "lowercase")]
 struct ClientPosition {
     client_id: usize,
-    poistion: Position,
+    position: Position,
 }
 
 impl CustomMessaage {
@@ -107,7 +107,7 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
 
         let client_position = ClientPosition {
             client_id: *my_id,
-            poistion: Position { x: 0, y: 0 },
+            position: Position { x: 50, y: 50 },
         };
         clients.push(client_position);
 
@@ -120,7 +120,7 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
             state.clients_count.lock().unwrap(),
             my_id.lock().unwrap(),
         )),
-        message_type: Some("server".into()),
+        message_type: Some("welcome".into()),
         sender_id: None,
         position: None,
         my_id: Some(*my_id.lock().unwrap()),
@@ -136,7 +136,7 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
             "Player {} joined",
             state.clients_count.lock().unwrap(),
         )),
-        message_type: Some("server".into()),
+        message_type: Some("someone_joined".into()),
         sender_id: None,
         position: None,
         my_id: Some(*my_id.lock().unwrap()),
@@ -173,6 +173,7 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
 
     let cloned_state = state.clone();
     let my_id_clone = my_id.clone();
+    let my_id_clone_2 = my_id.clone();
 
     // This task will receive messages from this client.
     let mut recv_task = tokio::spawn(async move {
@@ -199,10 +200,10 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
                         .map(|e| e.client_id)
                         .collect::<Vec<_>>()
                         .iter()
-                        .position(|e| *e == *my_id.lock().unwrap())
+                        .position(|e| *e == *my_id_clone.lock().unwrap())
                         .unwrap();
 
-                    clients_position[position].poistion.set_position(
+                    clients_position[position].position.set_position(
                         result.position.clone().unwrap().x,
                         result.position.clone().unwrap().y,
                     );
@@ -236,7 +237,27 @@ async fn handle_game(stream: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
     };
 
-    state.tx.send("One Player Disconnected!".into()).unwrap();
+    let message = CustomMessaage {
+        message: Some(format!("Someone left",)),
+        message_type: Some("someone_left".into()),
+        sender_id: Some(*my_id_clone_2.lock().unwrap()),
+        position: None,
+        my_id: None,
+        client_count: None,
+        clients_position: None,
+    };
+
+    let serialized = serde_json::to_string(&message).unwrap();
+
+    state.tx.send(Message::Text(serialized)).unwrap();
+
     let mut count = state.clients_count.lock().unwrap();
+    let mut clients = state.clients_position.lock().unwrap();
+    let index = clients
+        .iter()
+        .position(|x| x.client_id == *my_id_clone_2.lock().unwrap())
+        .unwrap();
+
+    clients.remove(index);
     *count -= 1;
 }
